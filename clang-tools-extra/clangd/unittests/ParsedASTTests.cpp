@@ -509,18 +509,31 @@ TEST(ParsedASTTest, PatchesAdditionalIncludes) {
   EXPECT_THAT(PatchedAST->getIncludeStructure().MainFileIncludes,
               testing::Pointwise(
                   EqInc(), ExpectedAST.getIncludeStructure().MainFileIncludes));
+  auto Flatten = [](const llvm::DenseMap<IncludeStructure::HeaderID, unsigned>
+                        &IncludeDepth,
+                    const IncludeStructure &Structure) {
+    std::vector<std::pair<std::string, unsigned>> Res;
+    for (const auto &E : IncludeDepth)
+      Res.emplace_back(Structure.getRealPath(E.first).str(), E.second);
+    llvm::sort(Res);
+    return Res;
+  };
   // Ensure file proximity signals are correct.
-  auto &SM = PatchedAST->getSourceManager();
-  auto &FM = SM.getFileManager();
-  // Copy so that we can use operator[] to get the children.
-  IncludeStructure Includes = PatchedAST->getIncludeStructure();
-  auto MainFE = FM.getFile(testPath("foo.cpp"));
-  ASSERT_TRUE(MainFE);
-  auto MainID = Includes.getID(*MainFE, SM);
-  auto AuxFE = FM.getFile(testPath("sub/aux.h"));
-  ASSERT_TRUE(AuxFE);
-  auto AuxID = Includes.getID(*AuxFE, SM);
-  EXPECT_THAT(Includes.IncludeChildren[*MainID], Contains(*AuxID));
+  auto PatchedEntry = PatchedAST->getSourceManager().getFileManager().getFile(
+      testPath("foo.cpp"));
+  ASSERT_TRUE(PatchedEntry);
+  auto PatchedEntryID = PatchedAST->getIncludeStructure().getID(*PatchedEntry);
+  ASSERT_TRUE(bool(PatchedEntryID));
+  auto ExpectedEntry = PatchedAST->getSourceManager().getFileManager().getFile(
+      testPath("foo.cpp"));
+  ASSERT_TRUE(ExpectedEntry);
+  auto ExpectedEntryID = PatchedAST->getIncludeStructure().getID(*PatchedEntry);
+  ASSERT_TRUE(bool(ExpectedEntryID));
+  EXPECT_EQ(
+      Flatten(PatchedAST->getIncludeStructure().includeDepth(*PatchedEntryID),
+              PatchedAST->getIncludeStructure()),
+      Flatten(ExpectedAST.getIncludeStructure().includeDepth(*ExpectedEntryID),
+              ExpectedAST.getIncludeStructure()));
 }
 
 TEST(ParsedASTTest, PatchesDeletedIncludes) {
@@ -554,20 +567,30 @@ TEST(ParsedASTTest, PatchesDeletedIncludes) {
               testing::Pointwise(
                   EqInc(), ExpectedAST.getIncludeStructure().MainFileIncludes));
   // Ensure file proximity signals are correct.
-  auto &SM = ExpectedAST.getSourceManager();
-  auto &FM = SM.getFileManager();
-  // Copy so that we can getOrCreateID().
-  IncludeStructure Includes = ExpectedAST.getIncludeStructure();
-  auto MainFE = FM.getFile(testPath("foo.cpp"));
-  ASSERT_TRUE(MainFE);
-  auto MainID = Includes.getOrCreateID(*MainFE, SM);
-  auto &PatchedFM = PatchedAST->getSourceManager().getFileManager();
-  IncludeStructure PatchedIncludes = PatchedAST->getIncludeStructure();
-  auto PatchedMainFE = PatchedFM.getFile(testPath("foo.cpp"));
-  ASSERT_TRUE(PatchedMainFE);
-  auto PatchedMainID = PatchedIncludes.getOrCreateID(*PatchedMainFE, SM);
-  EXPECT_EQ(Includes.includeDepth(MainID)[MainID],
-            PatchedIncludes.includeDepth(PatchedMainID)[PatchedMainID]);
+  auto Flatten = [](const llvm::DenseMap<IncludeStructure::HeaderID, unsigned>
+                        &IncludeDepth,
+                    const IncludeStructure &Structure) {
+    std::vector<std::pair<std::string, unsigned>> Res;
+    for (const auto &E : IncludeDepth)
+      Res.emplace_back(Structure.getRealPath(E.first).str(), E.second);
+    llvm::sort(Res);
+    return Res;
+  };
+  // Ensure file proximity signals are correct.
+  auto PatchedEntry = PatchedAST->getSourceManager().getFileManager().getFile(
+      testPath("foo.cpp"));
+  ASSERT_TRUE(PatchedEntry);
+  auto PatchedEntryID = PatchedAST->getIncludeStructure().getID(*PatchedEntry);
+  ASSERT_TRUE(bool(PatchedEntryID));
+  EXPECT_EQ(
+      Flatten(PatchedAST->getIncludeStructure().includeDepth(*PatchedEntryID),
+              PatchedAST->getIncludeStructure())
+          .size(),
+      1u);
+  EXPECT_TRUE(
+      Flatten(ExpectedAST.getIncludeStructure().includeDepth(*PatchedEntryID),
+              ExpectedAST.getIncludeStructure())
+          .empty());
 }
 
 // Returns Code guarded by #ifndef guards

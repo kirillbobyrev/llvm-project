@@ -67,8 +67,8 @@ public:
         // Treat as if included from the main file.
         IncludingFileEntry = SM.getFileEntryForID(MainFID);
       }
-      auto IncludingID = Out->getOrCreateID(IncludingFileEntry, SM),
-           IncludedID = Out->getOrCreateID(File, SM);
+      auto IncludingID = Out->getOrCreateID(IncludingFileEntry),
+           IncludedID = Out->getOrCreateID(File);
       Out->IncludeChildren[IncludingID].push_back(IncludedID);
     }
   }
@@ -156,35 +156,25 @@ collectIncludeStructureCallback(const SourceManager &SM,
 }
 
 llvm::Optional<IncludeStructure::HeaderID>
-IncludeStructure::getID(const FileEntry *Entry,
-                        const SourceManager &SM) const {
-  // HeaderID of the main file is always 0;
-  if (SM.getMainFileID() == SM.translateFile(Entry)) {
-    return static_cast<IncludeStructure::HeaderID>(0u);
-  }
-  auto It = UIDToIndex.find(Entry->getUniqueID());
-  if (It == UIDToIndex.end())
+IncludeStructure::getID(const FileEntry *Entry) const {
+  auto It = NameToIndex.find(Entry->getName());
+  if (It == NameToIndex.end())
     return llvm::None;
   return It->second;
 }
 
 IncludeStructure::HeaderID
-IncludeStructure::getOrCreateID(const FileEntry *Entry,
-                                const SourceManager &SM) {
-  // Main file's FileID was not known at IncludeStructure creation time.
-  if (SM.getMainFileID() == SM.translateFile(Entry)) {
-    UIDToIndex[Entry->getUniqueID()] =
-        static_cast<IncludeStructure::HeaderID>(0u);
-  }
-  auto R = UIDToIndex.try_emplace(
-      Entry->getUniqueID(),
+IncludeStructure::getOrCreateID(const FileEntry *Entry) {
+  auto R = NameToIndex.try_emplace(
+      Entry->getName(),
       static_cast<IncludeStructure::HeaderID>(RealPathNames.size()));
   if (R.second)
     RealPathNames.emplace_back();
-  IncludeStructure::HeaderID Result = R.first->getSecond();
-  std::string &RealPathName = RealPathNames[static_cast<unsigned>(Result)];
-  if (RealPathName.empty())
-    RealPathName = Entry->tryGetRealPathName().str();
+  IncludeStructure::HeaderID Result = R.first->getValue();
+  auto RealPathName = Entry->tryGetRealPathName();
+  if (!RealPathName.empty() &&
+      RealPathNames[static_cast<unsigned>(Result)].empty())
+    RealPathNames[static_cast<unsigned>(Result)] = RealPathName.str();
   return Result;
 }
 
@@ -192,7 +182,11 @@ llvm::DenseMap<IncludeStructure::HeaderID, unsigned>
 IncludeStructure::includeDepth(HeaderID Root) const {
   // Include depth 0 is the main file only.
   llvm::DenseMap<HeaderID, unsigned> Result;
-  assert(static_cast<unsigned>(Root) < RealPathNames.size());
+  if (static_cast<unsigned>(Root) >= RealPathNames.size()) {
+    elog("Requested includeDepth for {0} which doesn't exist IncludeStructure",
+         static_cast<unsigned>(Root));
+    return Result;
+  }
   Result[Root] = 0;
   std::vector<IncludeStructure::HeaderID> CurrentLevel;
   CurrentLevel.push_back(Root);
@@ -208,7 +202,9 @@ IncludeStructure::includeDepth(HeaderID Root) const {
       for (const auto &Child : IncludeChildren.lookup(Parent)) {
         if (Seen.insert(Child).second) {
           CurrentLevel.push_back(Child);
-          Result[Child] = Level;
+          // Can't include files if we don't have their real path.
+          if (!RealPathNames[static_cast<unsigned>(Child)].empty())
+            Result[Child] = Level;
         }
       }
     }

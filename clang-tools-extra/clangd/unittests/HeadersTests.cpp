@@ -67,12 +67,11 @@ private:
   }
 
 protected:
-  IncludeStructure::HeaderID getID(StringRef Filename,
-                                   IncludeStructure &Includes) {
-    auto &SM = Clang->getSourceManager();
-    auto Entry = SM.getFileManager().getFile(Filename);
+  IncludeStructure::HeaderID getID(StringRef Filename) {
+    auto Includes = collectIncludes();
+    auto Entry = Clang->getSourceManager().getFileManager().getFile(Filename);
     EXPECT_TRUE(Entry);
-    return Includes.getOrCreateID(*Entry, SM);
+    return Includes.getOrCreateID(*Entry);
   }
 
   IncludeStructure collectIncludes() {
@@ -164,9 +163,9 @@ TEST_F(HeadersTest, CollectRewrittenAndResolved) {
   EXPECT_THAT(Includes.MainFileIncludes,
               UnorderedElementsAre(
                   AllOf(Written("\"sub/bar.h\""), Resolved(BarHeader))));
-  EXPECT_THAT(Includes.includeDepth(getID(MainFile, Includes)),
-              UnorderedElementsAre(Distance(getID(MainFile, Includes), 0u),
-                                   Distance(getID(BarHeader, Includes), 1u)));
+  EXPECT_THAT(collectIncludes().includeDepth(getID(MainFile)),
+              UnorderedElementsAre(Distance(getID(MainFile), 0u),
+                                   Distance(getID(testPath("sub/bar.h")), 1u)));
 }
 
 TEST_F(HeadersTest, OnlyCollectInclusionsInMain) {
@@ -179,18 +178,17 @@ TEST_F(HeadersTest, OnlyCollectInclusionsInMain) {
   FS.Files[MainFile] = R"cpp(
 #include "bar.h"
 )cpp";
-  auto Includes = collectIncludes();
-  EXPECT_THAT(Includes.MainFileIncludes,
-              UnorderedElementsAre(
-                  AllOf(Written("\"bar.h\""), Resolved(BarHeader))));
-  EXPECT_THAT(Includes.includeDepth(getID(MainFile, Includes)),
-              UnorderedElementsAre(Distance(getID(MainFile, Includes), 0u),
-                                   Distance(getID(BarHeader, Includes), 1u),
-                                   Distance(getID(BazHeader, Includes), 2u)));
+  EXPECT_THAT(
+      collectIncludes().MainFileIncludes,
+      UnorderedElementsAre(AllOf(Written("\"bar.h\""), Resolved(BarHeader))));
+  EXPECT_THAT(collectIncludes().includeDepth(getID(MainFile)),
+              UnorderedElementsAre(Distance(getID(MainFile), 0u),
+                                   Distance(getID(testPath("sub/bar.h")), 1u),
+                                   Distance(getID(testPath("sub/baz.h")), 2u)));
   // includeDepth() also works for non-main files.
-  EXPECT_THAT(Includes.includeDepth(getID(BarHeader, Includes)),
-              UnorderedElementsAre(Distance(getID(BarHeader, Includes), 0u),
-                                   Distance(getID(BazHeader, Includes), 1u)));
+  EXPECT_THAT(collectIncludes().includeDepth(getID(testPath("sub/bar.h"))),
+              UnorderedElementsAre(Distance(getID(testPath("sub/bar.h")), 0u),
+                                   Distance(getID(testPath("sub/baz.h")), 1u)));
 }
 
 TEST_F(HeadersTest, PreambleIncludesPresentOnce) {
@@ -216,7 +214,7 @@ TEST_F(HeadersTest, UnResolvedInclusion) {
 
   EXPECT_THAT(collectIncludes().MainFileIncludes,
               UnorderedElementsAre(AllOf(Written("\"foo.h\""), Resolved(""))));
-  EXPECT_THAT(collectIncludes().IncludeChildren, IsEmpty());
+  EXPECT_TRUE(collectIncludes().IncludeChildren.empty());
 }
 
 TEST_F(HeadersTest, IncludedFilesGraph) {
@@ -235,13 +233,12 @@ TEST_F(HeadersTest, IncludedFilesGraph) {
   FS.Files[BazHeader] = "";
 
   auto Includes = collectIncludes();
-  llvm::DenseMap<IncludeStructure::HeaderID,
-                 SmallVector<IncludeStructure::HeaderID>>
-      Expected = {{getID(MainFile, Includes),
-                   {getID(BarHeader, Includes), getID(FooHeader, Includes)}},
-                  {getID(FooHeader, Includes),
-                   {getID(BarHeader, Includes), getID(BazHeader, Includes)}}};
-  EXPECT_EQ(Includes.IncludeChildren, Expected);
+  EXPECT_THAT(Includes.IncludeChildren[getID(MainFile)],
+              UnorderedElementsAreArray({getID(FooHeader), getID(BarHeader)}));
+  EXPECT_TRUE(Includes.IncludeChildren[getID(BarHeader)].empty());
+  EXPECT_THAT(Includes.IncludeChildren[getID(FooHeader)],
+              UnorderedElementsAreArray({getID(BarHeader), getID(BazHeader)}));
+  EXPECT_TRUE(Includes.IncludeChildren[getID(BazHeader)].empty());
 }
 
 TEST_F(HeadersTest, IncludeDirective) {
