@@ -18,6 +18,7 @@
 #include "FeatureModule.h"
 #include "Headers.h"
 #include "HeuristicResolver.h"
+#include "IncludeCleaner.h"
 #include "IncludeFixer.h"
 #include "Preamble.h"
 #include "SourceCode.h"
@@ -624,5 +625,34 @@ llvm::Optional<llvm::StringRef> ParsedAST::preambleVersion() const {
     return llvm::None;
   return llvm::StringRef(Preamble->Version);
 }
+
+std::vector<Inclusion> ParsedAST::computeUnusedIncludes() {
+  const auto &SM = getSourceManager();
+
+  auto Refs = findReferencedLocations(*this);
+  auto ReferencedFileIDs = findReferencedFiles(Refs, SM);
+  llvm::DenseSet<IncludeStructure::HeaderID> ReferencedFiles;
+  ReferencedFiles.reserve(ReferencedFileIDs.size());
+  for (FileID FID : ReferencedFileIDs) {
+    const FileEntry *FE = SM.getFileEntryForID(FID);
+    if (!FE) {
+      elog("Missing FE for {0}", SM.getComposedLoc(FID, 0).printToString(SM));
+      continue;
+    }
+    const auto File = Includes.getID(FE);
+    if (!File) {
+      elog("Missing FE for {0}", SM.getComposedLoc(FID, 0).printToString(SM));
+      continue;
+    }
+    ReferencedFiles.insert(*File);
+  }
+  auto MainFileIndex = Includes.getID(SM.getFileEntryForID(SM.getMainFileID()));
+  if (!MainFileIndex) {
+    elog("Missing MainFile in the IncludeStructure");
+    return {};
+  }
+  return getUnused(*MainFileIndex, Includes, ReferencedFiles, SM);
+}
+
 } // namespace clangd
 } // namespace clang

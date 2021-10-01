@@ -25,6 +25,7 @@
 #include "ParsedAST.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseSet.h"
+#include <vector>
 
 namespace clang {
 namespace clangd {
@@ -45,6 +46,31 @@ using ReferencedLocations = llvm::DenseSet<SourceLocation>;
 ///   ambiguous cases (e.g. implicitly used symbols, multiple declarations)
 /// - err on the side of reporting all possible locations
 ReferencedLocations findReferencedLocations(ParsedAST &AST);
+
+/// Retrieves IDs of all files containing SourceLocations from \p Locs.
+/// FIXME: Those locations could be within macro expansions and are resolved to
+/// their spelling/expansion locations.
+llvm::DenseSet<FileID> findReferencedFiles(const ReferencedLocations &Locs,
+                                           const SourceManager &SM);
+
+inline llvm::DenseMap<IncludeStructure::HeaderID, bool> directlyReferencedFiles(
+    const IncludeStructure &Includes,
+    const llvm::DenseSet<IncludeStructure::HeaderID> &Referenced,
+    IncludeStructure::HeaderID EntryPoint) {
+  llvm::DenseMap<IncludeStructure::HeaderID, bool> Result;
+  for (IncludeStructure::HeaderID Inclusion :
+       Includes.IncludeChildren.lookup(EntryPoint))
+    Result.try_emplace(Inclusion, Referenced.contains(Inclusion));
+  return Result;
+}
+
+/// Retrieves headers that are referenced from the main file (\p EntryPoint)
+/// but not used.
+std::vector<Inclusion>
+getUnused(IncludeStructure::HeaderID EntryPoint,
+          const IncludeStructure &Includes,
+          const llvm::DenseSet<IncludeStructure::HeaderID> &ReferencedFiles,
+          const SourceManager &SM);
 
 } // namespace clangd
 } // namespace clang

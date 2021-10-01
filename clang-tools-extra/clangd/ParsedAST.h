@@ -118,6 +118,8 @@ public:
     return Resolver.get();
   }
 
+  std::vector<Inclusion> computeUnusedIncludes();
+
 private:
   ParsedAST(llvm::StringRef Version,
             std::shared_ptr<const PreambleData> Preamble,
